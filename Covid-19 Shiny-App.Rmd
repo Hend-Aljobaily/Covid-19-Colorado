@@ -1,0 +1,282 @@
+---
+title: "Covid-19"
+author: "Hend Aljobaily"
+date: "September 19, 2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+# Working Directory #
+setwd("C:/Users/Hend Aljobaily/Desktop/Covid-19 Project")
+```
+
+
+```{r load-packages, include=FALSE}
+# Load ibrary #
+library(leaflet) # interactive map
+library(leaflet.extras) # interactive map
+library(dplyr) # for %>%
+library(rgdal)
+library(ggplot2) # plots
+library(zoo) # moving averages
+library(markdown) # R markdown
+```
+
+```{r}
+# Load ibrary #
+#library(shiny) # interactive plots
+#library(leaflet) # interactive map
+#library(leaflet.extras) # interactive map
+#library(dplyr) # for %>%
+#library(rgdal)
+#library(ggplot2) # plots
+#library(zoo) # moving averages
+#library(markdown) # R markdown
+```
+# Metric 1 #
+#### Create a map showing US COVID-19 case incidence per 100,000 in the last 7 days. Also, find and use state-level population estimates. 
+##### Note: Data obtained on September 3, 2020 
+
+Data obtained from CDC website (https://covid.cdc.gov/covid-data-tracker/#cases)
+population estimates, cases per 100,000 for 7 days, longitudes, & latitudes were added to the dataset
+
+```{r}
+#import data
+coviddata <- read.csv("covid-19.csv", header=TRUE)
+```
+
+
+### LEAFLET MAP ###
+
+```{r message = FALSE}
+#this is to add a popup with information about each state when clicking of the circle
+coviddata <- coviddata%>%mutate(popup_info=paste(State,"<br/>","Population:",Population,"<br/>",
+                                                 "Total Number of Cases:",Total.Cases,"<br/>",
+                                                 "Total Cases Per 100,000:", Case.Rate.per.100000,"<br/>",
+                                                 "Total Number of Cases In The Last 7 Days:",
+                                                 Cases.in.Last.7.Days,"<br/>",
+                                                 "Total Cases Per 100,000 In The Last 7 Days:",
+                                                 Case.Rate.per.100000.in.the.last.7.days))
+
+attach(coviddata)
+
+colors<-c("YlOrRd") #the higher the number of cases in the last 7 days, the darker the color
+bins <- c(0, 500, 1000, 2000, 5000, 10000, 20000, 40000) #adjust the defult bins
+palette<-colorBin(colors, coviddata$Cases.in.Last.7.Days, bins=bins) #color will be based on this
+
+
+#Create interactive map with leaflet
+map<-leaflet()%>%addTiles()%>%fitBounds(min(Longitude), min(Latitude),max(Longitude), max(Latitude))%>%
+  addCircleMarkers(data=Cases.in.Last.7.Days, lat=Latitude, lng=Longitude, 
+                   radius = sqrt(Case.Rate.per.100000.in.the.last.7.days),
+                   popup = popup_info, color = palette(Cases.in.Last.7.Days))%>%
+  addLegend("topright",      #add a legend for the tottal numder of cases in the last 7 days
+            pal = palette, 
+            values = Cases.in.Last.7.Days,
+            title = "Total Number of Cases",
+            opacity = 1)%>%
+  addControl("COVID-19 Cases in The Last 7 Days", position = "bottomright")%>%   #add title to the map
+  addControl("Note: The size of circle represents cases per 100,000 people in the last 7 days", 
+             position = "bottomleft",  className="map-title")%>% # add note about the size of circles
+  addControl("Note: Data obtained from CDC on Septermber 3, 2020", 
+             position = "bottomleft",  className="map-title") # add date of when data obtained
+
+map #plot map
+```
+
+<span style="color:red">**Click on the circle markers on the map for more information about state-level COVID-19 cases.**</span>
+
+# Metric 2 #
+#### Use state-level historical data to visualize:  
+##### Note: Data obtained on September 4, 2020
+
+```{r}
+# import data
+## data obtained from the COVID Tracking Project (https://covidtracking.com/)
+histdata <- read.csv("all-states-history.csv", header=TRUE)
+histdata$newdate <- as.character(strptime(as.character(histdata$date), "%Y%m%d")) #reformat date variable
+histdata$newdate <- as.Date(histdata$newdate)
+
+histdata <- histdata %>%  # 7-day moving average calculation
+  dplyr::arrange(desc(State)) %>% 
+  dplyr::group_by(State) %>% 
+  dplyr::mutate(MA7 = zoo::rollmean(Cases.Per.100000, k = 7, fill = NA)) %>% # moving average for positive cases per 100,000
+  dplyr::mutate(MA77 = zoo::rollmean(PCR.Per.100000, k = 7, fill = NA)) %>% # moving average for PCR conducted per 100,000
+  dplyr::mutate(MA777 = zoo::rollmean(Positivity, k = 7, fill = NA)) %>% # moving average for positivity percentage
+  dplyr::ungroup()
+
+```
+
+### SHINY PLOTS ####
+
+#### Part A: ####
+#### Visualize the 7-day moving average of new cases reported per 100,000 ####
+
+```{r}
+ui1 <- fluidPage(
+  titlePanel(h3("7-Day Moving Average of New COVID-19 Cases Per 100,000 People",align = "center")),
+  sidebarLayout(
+    sidebarPanel(
+      selectizeInput("stateInput", "U.S. State/Territory", choices=NULL, selected=NULL)
+    ),
+    mainPanel(plotOutput(outputId = "plot1", width  = "500px",height = "350px"))
+  )
+)
+
+server1 <- function(input, output, session) {
+  updateSelectizeInput(session, 'stateInput',
+                       choices = sort(unique(histdata$State)),
+                       server = TRUE
+  )
+  
+  output$plot1 <- renderPlot({
+    ggplot(histdata, aes(x = newdate, y = MA7))+
+      geom_line(data=histdata[histdata$State==input$stateInput,],color = "#09557f") + 
+      scale_x_date(date_breaks = "1 week", date_minor_breaks = "1 day", date_labels = "%d %B %Y",
+                   limits = c(min(histdata$newdate), max = max(histdata$newdate)),
+                   expand=c(0,0))+
+      #limit decided using max(histdata$Cases.Per.100000)
+      ylim(0,3600)+ 
+      xlab("Date")+ylab("New COVID-19 Cases Per 100,000 People")+
+      theme(axis.text.x = element_text(angle=40, hjust=1))
+  })
+}
+shinyApp(ui1, server1)
+
+```
+
+#### Part B: ####
+#### Visualize the 7-day moving average of daily PCR tests conducted per 100,000 people ####
+
+```{r}
+ui2 <- fluidPage(
+  titlePanel(h3("7-Day Moving Average of Daily PCR Conducted Per 100,000 People",align = "center")),
+  sidebarLayout(
+    sidebarPanel(
+      selectizeInput("stateInput", "U.S. State/Territory", choices=NULL, selected=NULL)
+    ),
+    mainPanel(plotOutput(outputId = "plot2", width  = "500px",height = "350px"))
+  )
+)
+
+server2 <- function(input, output, session) {
+  updateSelectizeInput(session, 'stateInput',
+                       choices = sort(unique(histdata$State)),
+                       server = TRUE
+  )
+  
+  output$plot2 <- renderPlot({
+    ggplot(histdata, aes(x = newdate, y = MA77))+
+      geom_line(data=histdata[histdata$State==input$stateInput,],color = "#09557f") + 
+      scale_x_date(date_breaks = "1 week", date_minor_breaks = "1 day", date_labels = "%d %B %Y",
+                   limits = c(min(histdata$newdate), max = max(histdata$newdate)),
+                   expand=c(0,0))+
+      #limit decided using max(histdata$PCR.Per.100000)
+      ylim(0,55000)+ 
+      xlab("Date")+ylab("Daily PCR Conducted Per 100,000 People")+
+      theme(axis.text.x = element_text(angle=40, hjust=1))
+  })
+}
+shinyApp(ui2, server2)
+```
+
+#### Part C: ####
+#### Visualize the 7-day moving average of percent positivity ####
+##### (person-level positive PCR tests divided by the total number of people who received a PCR test each day) #####
+
+```{r}
+
+ui3 <- fluidPage(
+  titlePanel(h3("7-Day Moving Average of COVID-19 Positivity Percentage",align = "center")),
+  sidebarLayout(
+    sidebarPanel(
+      selectizeInput("stateInput", "U.S. State/Territory", choices=NULL, selected=NULL)
+    ),
+    mainPanel(plotOutput(outputId = "plot3", width  = "500px",height = "350px"))
+  )
+)
+
+server3 <- function(input, output, session) {
+  updateSelectizeInput(session, 'stateInput',
+                       choices = sort(unique(histdata$State)),
+                       server = TRUE
+  )
+  
+  output$plot3 <- renderPlot({
+    ggplot(histdata, aes(x = newdate, y = MA777))+
+      geom_line(data=histdata[histdata$State==input$stateInput,],color = "#09557f") + 
+      scale_x_date(date_breaks = "1 week", date_minor_breaks = "1 day", date_labels = "%d %B %Y",
+                   limits = c(min(histdata$newdate), max = max(histdata$newdate)),
+                   expand=c(0,0))+
+      #limit decided using max(histdata$Positivity)
+      ylim(0,1)+ 
+      xlab("Date")+ylab("COVID-19 Positivity Percentage")+
+      theme(axis.text.x = element_text(angle=40, hjust=1))
+  })
+}
+shinyApp(ui3, server3)
+```
+
+### REGULAR PLOTS ###
+#### These plots inlcude COVID-19 related information for Colorado Nebraska, New Mexico, Wyoming, Arizona, Oklahoma, Kansas, Utah, and Texas ####
+
+```{r}
+# Keep only desired states
+st <- histdata %>% 
+  filter(State %in% c("Colorado","Texas","Nebraska","New Mexico", 
+                      "Wyoming","Arizona","Oklahoma","Kansas","Utah"))
+```
+
+#### Part A: ####
+#### Visualize the 7-day moving average of new cases reported per 100,000 ####
+
+```{r warning = FALSE}
+st %>%
+  ggplot(aes(x = newdate, y = MA7, color=State)) +
+  geom_point() + geom_line()+
+  scale_x_date(date_breaks = "1 week", date_minor_breaks = "1 day", date_labels = "%d %B %Y",
+               expand=c(0,0))+
+  #limit decided using max(histdata$Cases.Per.100000)
+  ylim(0,3600)+ 
+  xlab("Date")+ylab("New COVID-19 Cases Per 100,000 People")+
+  theme(axis.text.x = element_text(angle=40, hjust=1))+
+  ggtitle("7-Day Moving Average of New COVID-19 Cases Per 100,000 People")
+```
+
+#### Part B: ####
+#### Visualize the 7-day moving average of daily PCR tests conducted per 100,000 people ####
+
+```{r warning = FALSE}
+st %>%
+  ggplot(aes(x = newdate, y = MA77, color=State)) +
+  geom_point() + geom_line()+
+  scale_x_date(date_breaks = "1 week", date_minor_breaks = "1 day", date_labels = "%d %B %Y",
+               expand=c(0,0))+
+  #limit decided using max(histdata$PCR.Per.100000)
+  ylim(0,55000)+ 
+  xlab("Date")+ylab("Daily PCR Conducted Per 100,000 People")+
+  theme(axis.text.x = element_text(angle=40, hjust=1))+
+  ggtitle("7-Day Moving Average of Daily PCR Conducted Per 100,000 People")
+```
+
+#### Part C: ####
+#### Visualize the 7-day moving average of percent positivity ####
+##### (person-level positive PCR tests divided by the total number of people who received a PCR test each day) #####
+
+```{r warning = FALSE}
+st %>%
+  ggplot(aes(x = newdate, y = MA777, color=State)) +
+  geom_point() + geom_line()+
+  scale_x_date(date_breaks = "1 week", date_minor_breaks = "1 day", date_labels = "%d %B %Y",
+               expand=c(0,0))+
+  #limit decided using max(histdata$Positivity)
+  ylim(0,1)+ 
+  xlab("Date")+ylab("COVID-19 Positivity Percentage")+
+  theme(axis.text.x = element_text(angle=40, hjust=1))+
+  ggtitle("7-Day Moving Average of COVID-19 Positivity Percentage")
+```
+
